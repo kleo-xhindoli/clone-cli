@@ -1,0 +1,36 @@
+#!/usr/bin/expect -f
+# Drives the real CLI through the interactive delete confirmation against the mock server.
+set timeout 60
+set port [lindex $argv 0]
+set logdir [lindex $argv 1]
+set env(CLONE_CLI_GOOGLE_BASE_URL) "http://localhost:$port/calendar/v3"
+set env(CLONE_CLI_GOOGLE_BATCH_URL) "http://localhost:$port/batch/calendar/v3"
+set env(CLONE_CLI_ACCESS_TOKEN) "good-token"
+set env(CLONE_CLI_LOG_DIR) $logdir
+spawn node dist/index.js --op delete --provider google --calendar-id support@example.com --mode batch
+# clack wraps on the pty width; give it a real terminal size
+stty columns 140 rows 50 < $spawn_out(slave,name)
+expect {
+  -re "abort" {}
+  timeout { puts "\nTIMEOUT waiting for confirmation prompt"; exit 2 }
+}
+send "delete"
+sleep 0.5
+send "\r"
+expect {
+  -re "Paste a fresh" {
+    sleep 0.3
+    send "fresh-token"
+    sleep 0.3
+    send "\r"
+    exp_continue
+  }
+  -re "Finished (without failures|with problems)" {}
+  timeout { puts "\nTIMEOUT waiting for completion"; exit 3 }
+}
+expect {
+  eof {}
+  timeout { puts "\nTIMEOUT waiting for exit"; exec kill [exp_pid]; exit 4 }
+}
+catch wait result
+exit [lindex $result 3]
