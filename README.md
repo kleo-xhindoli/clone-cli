@@ -24,6 +24,7 @@ Requires Node 20 or newer.
    - Google / Outlook: an access token (input is hidden).
    - CalDAV: server URL, username and app password (CalDAV has no bearer tokens).
 5. Operation-specific inputs:
+   - Outlook: **Standard** or **Shared calendar** detection (see below).
    - Delete: **Batch** or **Non-batch** mode.
    - CalDAV: scan 1 year back / 1 year ahead (the sync service's window) or the whole calendar.
 6. The tool connects, looks the calendar up and prints its name.
@@ -46,6 +47,8 @@ Flags and environment variables pre-fill prompts. The delete confirmation is alw
 CLONE_CLI_ACCESS_TOKEN=ya29... npm start -- --op list --provider google --calendar-id primary
 CLONE_CLI_ACCESS_TOKEN=eyJ... npm start -- --op delete --provider outlook --calendar-id AAMk... --mode batch
 
+CLONE_CLI_ACCESS_TOKEN=eyJ... npm start -- --op delete --provider outlook --calendar-id AAMk... --detection shared --mode batch
+
 CLONE_CLI_CALDAV_SERVER_URL=https://caldav.icloud.com \
 CLONE_CLI_CALDAV_USERNAME=user@icloud.com \
 CLONE_CLI_CALDAV_PASSWORD=xxxx-xxxx-xxxx-xxxx \
@@ -53,6 +56,18 @@ npm start -- --op list --provider caldav --calendar-id https://caldav.icloud.com
 ```
 
 Run `npm start -- --help` for the full list.
+
+## Outlook detection modes
+
+| Mode            | A clone is an event that…                                                     | Listing                                   |
+| --------------- | ----------------------------------------------------------------------------- | ----------------------------------------- |
+| Standard        | carries the `io.onecal` open extension with `onecal_createdByOneCal = true`  | Graph filters on the extension server-side |
+| Shared calendar | has the OneCal id `238a21f4` in its description (the `<div id="238a21f4">` signature the sync service appends) | reads **every** event in the calendar with its HTML body, then filters locally |
+
+Use **Shared calendar** when clones are clearly left behind but Standard finds none (or
+too few): Microsoft shared calendars often drop the open extension, so the description
+signature is the only trace left. It is slower because Graph cannot filter on the body.
+It works for both listing and deleting, so run a list first to check what it finds.
 
 ## What "batch" means per provider
 

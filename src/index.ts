@@ -16,6 +16,7 @@ import {
   askCalendarId,
   askMode,
   askOperation,
+  askOutlookDetection,
   askProvider,
   confirmDeletion,
   prompts,
@@ -26,6 +27,7 @@ import {
 } from "./cli/prompts.js";
 import { log, status } from "./cli/ui.js";
 import type { DeleteMode } from "./core/pipeline.js";
+import type { OutlookDetection } from "./core/clone-detection.js";
 import { HttpError } from "./http/client.js";
 import { FileLogger, timestampForFilename } from "./logging/file-logger.js";
 import { CalDavProvider } from "./providers/caldav.js";
@@ -47,6 +49,9 @@ Options (each one skips the matching prompt):
   --calendar-id <id>              Calendar ID (CalDAV: the calendar URL)
   --mode <batch|single>           Delete mode
   --range <1y|all>                CalDAV only: time window to scan
+  --detection <standard|shared>   Outlook only: find clones by OneCal metadata
+                                  (standard) or by the OneCal id in the event
+                                  description (shared calendars that strip metadata)
   --log-dir <path>                Where to write the JSONL request log
   -h, --help                      Show this help
 
@@ -92,6 +97,10 @@ function parseArgs(argv: string[]): Prefilled & { help?: boolean; logDir?: strin
         out.range = expectOneOf(take(i), ["1y", "all"]) as CalDavRange;
         i++;
         break;
+      case "--detection":
+        out.detection = expectOneOf(take(i), ["standard", "shared"]) as OutlookDetection;
+        i++;
+        break;
       case "--log-dir":
         out.logDir = take(i);
         i++;
@@ -124,6 +133,9 @@ async function collectAnswers(pre: Prefilled, providerLabelHint: (p: ProviderNam
   } else {
     answers.accessToken = await askAccessToken(pre.accessToken);
   }
+  if (provider === "outlook") {
+    answers.detection = await askOutlookDetection(pre.detection);
+  }
   if (op === "delete") {
     answers.mode = await askMode(providerLabelHint(provider), pre.mode);
   }
@@ -138,7 +150,7 @@ function buildProvider(answers: Answers, logger: FileLogger): CloneProvider {
     case "google":
       return new GoogleProvider({ accessToken: answers.accessToken!, logger, onRetry });
     case "outlook":
-      return new OutlookProvider({ accessToken: answers.accessToken!, logger, onRetry });
+      return new OutlookProvider({ accessToken: answers.accessToken!, logger, onRetry, detection: answers.detection });
     case "caldav": {
       const now = new Date();
       const timeRange = answers.range === "all" ? undefined : { start: subYears(now, 1).toISOString(), end: addYears(now, 1).toISOString() };
@@ -171,7 +183,7 @@ async function main(): Promise<number> {
 
   const runName = `${timestampForFilename()}_${answers.op}_${answers.provider}`;
   const logger = new FileLogger({ dir: pre.logDir, name: runName });
-  logger.info("run.start", { op: answers.op, provider: answers.provider, calendarId: answers.calendarId, mode: answers.mode, range: answers.range });
+  logger.info("run.start", { op: answers.op, provider: answers.provider, calendarId: answers.calendarId, mode: answers.mode, range: answers.range, detection: answers.detection });
   log.info(`Full request/response log: ${logger.path}`);
 
   const provider = buildProvider(answers, logger);
@@ -196,6 +208,7 @@ async function main(): Promise<number> {
     provider: provider.label,
     calendarId: calendar.id,
     mode: answers.mode!,
+    detection: answers.detection,
     logPath: logger.path,
   });
   if (!confirmed) {

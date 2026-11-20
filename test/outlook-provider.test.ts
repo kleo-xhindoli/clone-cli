@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { OUTLOOK_EXTENSION_ID } from "../src/core/clone-detection.js";
+import { ONECAL_ID, OUTLOOK_EXTENSION_ID } from "../src/core/clone-detection.js";
 import { runDeletePipeline } from "../src/core/pipeline.js";
 import { HttpClient } from "../src/http/client.js";
 import { NullLogger } from "../src/logging/file-logger.js";
@@ -53,11 +53,19 @@ function fakeGraph(opts: { pages: unknown[][]; deleteStatus?: (id: string) => nu
   return { fetchImpl: fetchImpl as unknown as typeof fetch, deleted, batchSizes, listUrls };
 }
 
-function provider(fetchImpl: typeof fetch) {
+function provider(fetchImpl: typeof fetch, detection?: "standard" | "shared") {
   const logger = new NullLogger();
   const http = new HttpClient({ provider: "outlook", accessToken: "t", logger, rps: 10_000, fetchImpl });
-  return new OutlookProvider({ accessToken: "t", logger, http });
+  return new OutlookProvider({ accessToken: "t", logger, http, detection });
 }
+
+const signed = (id: string, extra: Record<string, unknown> = {}) => ({
+  id,
+  subject: `Busy ${id}`,
+  type: "singleInstance",
+  body: { contentType: "html", content: `<html><body>Agenda<div id="${ONECAL_ID}"></div></body></html>` },
+  ...extra,
+});
 
 describe("OutlookProvider", () => {
   it("lists clones across nextLink pages, ignoring occurrences and non-clones", async () => {
@@ -87,5 +95,33 @@ describe("OutlookProvider", () => {
     const summary = await runDeletePipeline({ provider: provider(fake.fetchImpl), calendarId: "AAMk", mode: "batch" });
     expect(summary.counts).toMatchObject({ deleted: 1, failed: 1, retried: 0 });
     expect(summary.failures[0].result.error).toContain("ErrorItemNotFound");
+  });
+
+  describe("shared calendar detection", () => {
+    it("reads every event with its HTML body and keeps only those carrying the OneCal id", async () => {
+      const fake = fakeGraph({
+        pages: [
+          [signed("a"), { id: "real", subject: "Real", body: { contentType: "html", content: "<p>hi</p>" } }, clone("meta-only")],
+          [signed("occ", { type: "occurrence" }), signed("b", { type: "seriesMaster" })],
+        ],
+      });
+      const p = provider(fake.fetchImpl, "shared");
+      const ids: string[] = [];
+      for await (const page of p.listClones("AAMk")) ids.push(...page.map((e) => e.id));
+      expect(ids).toEqual(["a", "b"]);
+
+      const params = new URL(fake.listUrls[0]).searchParams;
+      expect(params.get("$filter")).toBeNull();
+      expect(params.get("$select")?.split(",")).toContain("body");
+      const init = (fake.fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1] as RequestInit;
+      expect((init.headers as Record<string, string>).Prefer).toBe('outlook.body-content-type="html"');
+    });
+
+    it("deletes the signed clones it found", async () => {
+      const fake = fakeGraph({ pages: [[signed("a"), { id: "real", subject: "Real" }, signed("b")]] });
+      const summary = await runDeletePipeline({ provider: provider(fake.fetchImpl, "shared"), calendarId: "AAMk", mode: "batch" });
+      expect(summary.counts).toMatchObject({ found: 2, deleted: 2, failed: 0 });
+      expect(fake.deleted.sort()).toEqual(["a", "b"]);
+    });
   });
 });

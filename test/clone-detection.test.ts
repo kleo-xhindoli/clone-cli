@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  ONECAL_ID,
   OUTLOOK_EXTENSION_ID,
   calDavToCloneEvent,
   googleToCloneEvent,
@@ -168,5 +169,32 @@ describe("CalDAV clone detection", () => {
     expect(parsed.isClone).toBe(true);
     expect(parsed.summary).toBe("Busy");
     expect(parsed.isRecurring).toBe(true);
+  });
+});
+
+describe("Outlook shared calendar detection", () => {
+  const withBody = (content?: string, extra: Record<string, unknown> = {}) => ({
+    id: "o1",
+    type: "singleInstance",
+    body: content === undefined ? undefined : { contentType: "html", content },
+    ...extra,
+  });
+
+  it("matches the sync service signature anywhere in the body", () => {
+    expect(isOutlookClone(withBody(`<p>Notes</p><div id="${ONECAL_ID}"></div>`), "shared")).toBe(true);
+    // Exchange may rewrite the HTML around it; the sync service only checks includes().
+    expect(isOutlookClone(withBody(`<div id="x_${ONECAL_ID}"></div>`), "shared")).toBe(true);
+  });
+
+  it("rejects events without the id, without a body, and occurrences", () => {
+    expect(isOutlookClone(withBody("<p>Real meeting</p>"), "shared")).toBe(false);
+    expect(isOutlookClone(withBody(undefined), "shared")).toBe(false);
+    expect(isOutlookClone(withBody(`<div id="${ONECAL_ID}"></div>`, { type: "occurrence" }), "shared")).toBe(false);
+  });
+
+  it("ignores the extension in shared mode and the body in standard mode", () => {
+    const extOnly = { id: "o2", extensions: [{ id: OUTLOOK_EXTENSION_ID, onecal_createdByOneCal: "true" }] };
+    expect(isOutlookClone(extOnly, "shared")).toBe(false);
+    expect(isOutlookClone(withBody(`<div id="${ONECAL_ID}"></div>`), "standard")).toBe(false);
   });
 });

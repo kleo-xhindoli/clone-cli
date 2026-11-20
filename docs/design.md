@@ -13,6 +13,7 @@ calendar at a time, with enough logging to troubleshoot afterwards.
 | -------- | ---------------------------------------------------------------------- | ------------------------------------------------ |
 | Google   | `privateExtendedProperty=onecal_createdByOneCal=true`, 2500/page, ≤250 pages | `extendedProperties.private.onecal_createdByOneCal === "true"` and `status !== "cancelled"` |
 | Outlook  | `$filter=extensions/any(f:f/id eq 'Microsoft.OutlookServices.OpenTypeExtension.io.onecal')` with the extension expanded, 100/page, ≤500 pages | extension `onecal_createdByOneCal === "true"`, `type !== "occurrence"` |
+| Outlook (shared calendar detection) | none: every event is read with `body` (`Prefer: outlook.body-content-type="html"`), 100/page, ≤5000 pages | body contains `ONECAL_ID` (`238a21f4`, same `includes` check as the sync service), `type !== "occurrence"` |
 | CalDAV   | calendar-query for VEVENT hrefs (optionally time-ranged), multiget in chunks of 100 | any VEVENT has `X-ONECAL_CREATEDBYONECAL: true` (or the underscore-less variant) or the UID is in the `oc1.…` clone format |
 
 Nothing is deleted unless the client-side check passed on the item itself.

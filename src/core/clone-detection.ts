@@ -4,7 +4,9 @@
  *
  * Google:  extendedProperties.private.onecal_createdByOneCal === "true"
  * Outlook: open extension "Microsoft.OutlookServices.OpenTypeExtension.io.onecal"
- *          with onecal_createdByOneCal === "true"
+ *          with onecal_createdByOneCal === "true" ("standard" detection), or
+ *          the OneCal signature id in the body ("shared calendar" detection,
+ *          for shared calendars where Exchange strips the extension)
  * CalDAV:  X-ONECAL_CREATEDBYONECAL (or the underscore-less variant some servers
  *          produce), or a UID in the "oc1." clone format used for servers that
  *          drop X- properties (Zoho).
@@ -18,6 +20,13 @@ export const ONECAL_SOURCE_ID_PROP = "onecal_source_id";
 
 export const OUTLOOK_EXTENSION_NAME = "io.onecal";
 export const OUTLOOK_EXTENSION_ID = `Microsoft.OutlookServices.OpenTypeExtension.${OUTLOOK_EXTENSION_NAME}`;
+
+/**
+ * mono/apps/sync-service/src/calendar-providers/generic/constants.ts: every
+ * clone description ends with the signature `<div id="238a21f4"></div>`, and
+ * the sync service recognises its own events with description.includes(ONECAL_ID).
+ */
+export const ONECAL_ID = "238a21f4";
 
 // ---------------------------------------------------------------- Google
 
@@ -76,7 +85,15 @@ export interface OutlookEventLike {
   start?: { dateTime?: string; timeZone?: string };
   end?: { dateTime?: string; timeZone?: string };
   extensions?: Array<{ id?: string } & Record<string, unknown>>;
+  body?: { contentType?: string; content?: string };
 }
+
+/**
+ * "standard": the io.onecal open extension (what the sync service relies on).
+ * "shared": the OneCal signature id in the event body. Microsoft shared
+ * calendars often drop the open extension, leaving the body as the only trace.
+ */
+export type OutlookDetection = "standard" | "shared";
 
 export function getOutlookOneCalExtension(
   event: OutlookEventLike
@@ -84,12 +101,18 @@ export function getOutlookOneCalExtension(
   return event.extensions?.find((ext) => ext.id === OUTLOOK_EXTENSION_ID);
 }
 
-export function isOutlookClone(event: OutlookEventLike): boolean {
+export function isOutlookClone(event: OutlookEventLike, detection: OutlookDetection = "standard"): boolean {
   if (!event.id) return false;
   // Occurrences are virtual: deleting the master removes them.
   if (event.type === "occurrence") return false;
+  if (detection === "shared") return hasOneCalSignature(event);
   const ext = getOutlookOneCalExtension(event);
   return ext?.[ONECAL_CREATED_BY_PROP] === "true";
+}
+
+/** Same check as the sync service: the body contains the OneCal id. */
+export function hasOneCalSignature(event: OutlookEventLike): boolean {
+  return typeof event.body?.content === "string" && event.body.content.includes(ONECAL_ID);
 }
 
 export function outlookToCloneEvent(event: OutlookEventLike): CloneEvent {

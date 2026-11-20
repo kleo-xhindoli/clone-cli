@@ -1,12 +1,20 @@
 /**
- * Microsoft Graph (Outlook) provider. Listing follows mono's getCloneEvents:
- * filter on the io.onecal open extension, expand it, walk every page, drop
- * occurrences, and re-check onecal_createdByOneCal on each item.
+ * Microsoft Graph (Outlook) provider.
+ *
+ * Standard detection follows mono's getCloneEvents: filter on the io.onecal
+ * open extension, expand it, walk every page, drop occurrences, and re-check
+ * onecal_createdByOneCal on each item.
+ *
+ * Shared calendar detection is for shared calendars where Exchange stripped
+ * the open extension. Graph cannot filter on the body, so every event in the
+ * calendar is read (with its HTML body) and kept only when the body contains
+ * the OneCal signature id.
  */
 import {
   OUTLOOK_EXTENSION_ID,
   isOutlookClone,
   outlookToCloneEvent,
+  type OutlookDetection,
   type OutlookEventLike,
 } from "../core/clone-detection.js";
 import { HttpClient, summarizeError, type HttpResponse } from "../http/client.js";
@@ -26,6 +34,8 @@ import {
 const BASE_URL = process.env.CLONE_CLI_OUTLOOK_BASE_URL || "https://graph.microsoft.com/v1.0";
 const PAGE_SIZE = 100;
 const MAX_PAGES = 500;
+// Shared detection reads every event in the calendar, not just clones.
+const MAX_PAGES_SHARED = 5000;
 const ALREADY_GONE = [404];
 const SELECT_FIELDS = "id,subject,type,seriesMasterId,isCancelled,start,end";
 
@@ -46,8 +56,16 @@ export class OutlookProvider implements CloneProvider {
   readonly credentialLabel = "access token";
 
   private readonly http: HttpClient;
+  readonly detection: OutlookDetection;
 
-  constructor(options: { accessToken: string; logger: FileLogger; http?: HttpClient; onRetry?: ConstructorParameters<typeof HttpClient>[0]["onRetry"] }) {
+  constructor(options: {
+    accessToken: string;
+    logger: FileLogger;
+    http?: HttpClient;
+    onRetry?: ConstructorParameters<typeof HttpClient>[0]["onRetry"];
+    detection?: OutlookDetection;
+  }) {
+    this.detection = options.detection ?? "standard";
     this.http =
       options.http ??
       new HttpClient({ provider: "outlook", accessToken: options.accessToken, logger: options.logger, onRetry: options.onRetry });
@@ -67,26 +85,33 @@ export class OutlookProvider implements CloneProvider {
   }
 
   async *listClones(calendarId: string, onProgress?: ListProgress): AsyncGenerator<CloneEvent[]> {
+    const shared = this.detection === "shared";
     const params = new URLSearchParams({
+      // Still expanded in shared mode so sync ids show up when the extension survived.
       $expand: `extensions($filter=id eq '${OUTLOOK_EXTENSION_ID}')`,
-      $filter: `extensions/any(f:f/id eq '${OUTLOOK_EXTENSION_ID}')`,
-      $select: SELECT_FIELDS,
+      ...(shared ? {} : { $filter: `extensions/any(f:f/id eq '${OUTLOOK_EXTENSION_ID}')` }),
+      $select: shared ? `${SELECT_FIELDS},body` : SELECT_FIELDS,
       $top: String(PAGE_SIZE),
     });
+    // The signature is an HTML element, so the body must not come back as text.
+    const headers = shared ? { Prefer: 'outlook.body-content-type="html"' } : undefined;
+    const maxPages = shared ? MAX_PAGES_SHARED : MAX_PAGES;
     let url: string | undefined = `${BASE_URL}/me/calendars/${encodeURIComponent(calendarId)}/events?${params.toString()}`;
     let page = 0;
     let total = 0;
 
-    while (url && page < MAX_PAGES) {
+    while (url && page < maxPages) {
       page++;
       onProgress?.({ phase: "fetching", page, itemsOnPage: 0, clonesOnPage: 0, ignoredOnPage: 0, totalClones: total });
       const res: HttpResponse<GraphPage<OutlookEventLike>> = await this.http.request<GraphPage<OutlookEventLike>>({
         method: "GET",
         url,
-        label: `list clones page ${page}`,
+        headers,
+        label: `list ${shared ? "events (shared calendar detection)" : "clones"} page ${page}`,
       });
       const items = res.json?.value ?? [];
-      const clones = items.filter(isOutlookClone).map(outlookToCloneEvent);
+      // Bodies can be large; only the slim CloneEvent is kept past this point.
+      const clones = items.filter((e) => isOutlookClone(e, this.detection)).map(outlookToCloneEvent);
       total += clones.length;
       url = res.json?.["@odata.nextLink"];
       onProgress?.({

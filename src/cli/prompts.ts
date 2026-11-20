@@ -7,6 +7,7 @@ import * as p from "@clack/prompts";
 import pc from "picocolors";
 import type { ProviderName } from "../providers/types.js";
 import type { DeleteMode } from "../core/pipeline.js";
+import type { OutlookDetection } from "../core/clone-detection.js";
 
 export type Operation = "list" | "delete";
 export type CalDavRange = "1y" | "all";
@@ -18,6 +19,7 @@ export interface Prefilled {
   accessToken?: string;
   mode?: DeleteMode;
   range?: CalDavRange;
+  detection?: OutlookDetection;
   caldavServerUrl?: string;
   caldavUsername?: string;
   caldavPassword?: string;
@@ -31,6 +33,8 @@ export interface Answers {
   caldav?: { serverUrl: string; username: string; password: string };
   mode?: DeleteMode;
   range?: CalDavRange;
+  /** Outlook only. */
+  detection?: OutlookDetection;
 }
 
 function bail(value: unknown): asserts value is Exclude<typeof value, symbol> {
@@ -135,6 +139,23 @@ export async function askMode(batchHint: string, pre?: DeleteMode): Promise<Dele
   return mode as DeleteMode;
 }
 
+export async function askOutlookDetection(pre?: OutlookDetection): Promise<OutlookDetection> {
+  if (pre) return pre;
+  const detection = await p.select({
+    message: "How should clones be detected?",
+    options: [
+      { value: "standard", label: "Standard", hint: "OneCal metadata on the event (io.onecal extension); use this by default" },
+      {
+        value: "shared",
+        label: "Shared calendar",
+        hint: "OneCal id in the event description; for shared calendars where the metadata was stripped. Reads every event, slower",
+      },
+    ],
+  });
+  bail(detection);
+  return detection as OutlookDetection;
+}
+
 export async function askCalDavRange(pre?: CalDavRange): Promise<CalDavRange> {
   if (pre) return pre;
   const range = await p.select({
@@ -153,6 +174,7 @@ export async function confirmDeletion(details: {
   provider: string;
   calendarId: string;
   mode: DeleteMode;
+  detection?: OutlookDetection;
   logPath: string;
 }): Promise<boolean> {
   p.note(
@@ -161,6 +183,9 @@ export async function confirmDeletion(details: {
       `${pc.dim("Provider     ")}  ${details.provider}`,
       `${pc.dim("Calendar ID  ")}  ${details.calendarId}`,
       `${pc.dim("Mode         ")}  ${details.mode === "batch" ? "batch" : "non-batch"}`,
+      ...(details.detection
+        ? [`${pc.dim("Detection    ")}  ${details.detection === "shared" ? "shared calendar (OneCal id in the description)" : "standard (OneCal metadata)"}`]
+        : []),
       `${pc.dim("Log file     ")}  ${details.logPath}`,
       "",
       pc.red("Every OneCal clone event in this calendar will be permanently deleted."),
